@@ -10,14 +10,11 @@ class YoutubeService {
   // Get API Key from .env
   String get _apiKey => dotenv.env['YOUTUBE_API_KEY'] ?? '';
 
-  Future<List<Video>> getPopularVideos() async {
-    if (_apiKey.isEmpty) {
-      debugPrint('Error: YOUTUBE_API_KEY is missing in .env');
-      return [];
-    }
+  Future<Map<String, dynamic>> getPopularVideos({String? pageToken}) async {
+    if (_apiKey.isEmpty) return {'videos': [], 'nextPageToken': null};
 
     final url = Uri.parse(
-        '$_baseUrl/videos?part=snippet,contentDetails,statistics&chart=mostPopular&regionCode=US&maxResults=20&key=$_apiKey');
+        '$_baseUrl/videos?part=snippet,contentDetails,statistics&chart=mostPopular&regionCode=US&maxResults=20&key=$_apiKey${pageToken != null ? '&pageToken=$pageToken' : ''}');
 
     try {
       final response = await http.get(url);
@@ -25,22 +22,38 @@ class YoutubeService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final List<dynamic> items = data['items'];
-        return items.map((json) => Video.fromYoutubeJson(json)).toList();
+        final String? nextToken = data['nextPageToken'];
+        return {
+          'videos': items.map((json) => Video.fromYoutubeJson(json)).toList(),
+          'nextPageToken': nextToken,
+        };
       } else {
-        debugPrint('Failed to load popular videos: ${response.body}');
-        throw Exception('Failed to load popular videos');
+        final errorData = json.decode(response.body);
+        final error = errorData['error'];
+        final errorMessage = error?['message'] ?? 'Unknown API error';
+        final reason = error?['errors']?[0]?['reason'] ?? 'unknown_reason';
+        
+        debugPrint('YouTube API Error (${response.statusCode}): $errorMessage ($reason)');
+        
+        if (response.statusCode == 400 && reason == 'keyInvalid') {
+          throw Exception('Invalid API Key. Please update your .env file.');
+        } else if (response.statusCode == 403 && reason == 'quotaExceeded') {
+          throw Exception('YouTube API quota exceeded.');
+        }
+        
+        throw Exception(errorMessage);
       }
     } catch (e) {
       debugPrint('Error fetching popular videos: $e');
-      return [];
+      rethrow;
     }
   }
 
-  Future<List<Video>> searchVideos(String query) async {
-    if (_apiKey.isEmpty) return [];
+  Future<Map<String, dynamic>> searchVideos(String query, {String? pageToken}) async {
+    if (_apiKey.isEmpty) return {'videos': [], 'nextPageToken': null};
 
     final url = Uri.parse(
-        '$_baseUrl/search?part=snippet&q=$query&type=video&maxResults=20&key=$_apiKey');
+        '$_baseUrl/search?part=snippet&q=$query&type=video&maxResults=20&key=$_apiKey${pageToken != null ? '&pageToken=$pageToken' : ''}');
 
     try {
       final response = await http.get(url);
@@ -48,24 +61,60 @@ class YoutubeService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final List<dynamic> items = data['items'];
+        final String? nextToken = data['nextPageToken'];
         
-        // Search results don't have contentDetails/statistics, so we might need a second call or just show basic info.
-        // For now, we'll just map what we have. The Video.fromYoutubeJson handles missing fields gracefully.
-        // Ideally, we would take the video IDs and call the videos endpoint to get full details.
-        
-        // Fetch full details for these video IDs to get duration and views
-        final videoIds = items.map((item) => item['id']['videoId']).join(',');
+        final videoIds = items
+            .where((item) => item['id']['videoId'] != null)
+            .map((item) => item['id']['videoId'])
+            .join(',');
+            
         if (videoIds.isNotEmpty) {
-           return await _getVideosByIds(videoIds);
+           final details = await _getVideosByIds(videoIds);
+           return {
+             'videos': details,
+             'nextPageToken': nextToken,
+           };
         }
         
-        return items.map((json) => Video.fromYoutubeJson(json)).toList();
-      } else {
-        debugPrint('Failed to search videos: ${response.body}');
-        throw Exception('Failed to search videos');
+        return {
+          'videos': items.map((json) => Video.fromYoutubeJson(json)).toList(),
+          'nextPageToken': nextToken,
+        };
       }
+      return {'videos': [], 'nextPageToken': null};
     } catch (e) {
       debugPrint('Error searching videos: $e');
+      return {'videos': [], 'nextPageToken': null};
+    }
+  }
+
+  // NEW: Fetch user's actual subscriptions
+  Future<List<Map<String, dynamic>>> getUserSubscriptions(String accessToken) async {
+    final url = Uri.parse('$_baseUrl/subscriptions?part=snippet&mine=true&maxResults=50');
+    
+    try {
+      final response = await http.get(
+        url,
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> items = data['items'];
+        return items.map((item) => {
+          'id': item['snippet']['resourceId']['channelId'],
+          'title': item['snippet']['title'],
+          'thumbnail': item['snippet']['thumbnails']['default']['url'],
+        }).toList();
+      } else {
+        debugPrint('Failed to fetch subscriptions: ${response.body}');
+        return [];
+      }
+    } catch (e) {
+      debugPrint('Error fetching subscriptions: $e');
       return [];
     }
   }

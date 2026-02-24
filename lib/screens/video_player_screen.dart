@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
-import 'package:transparent_image/transparent_image.dart';
 import 'package:vidstream_app/models/video.dart';
 import 'package:vidstream_app/services/youtube_service.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:vidstream_app/services/firestore_service.dart';
+import 'package:vidstream_app/widgets/video_card.dart';
+import 'package:vidstream_app/widgets/video_player_widgets.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final Video? video;
@@ -16,39 +18,28 @@ class VideoPlayerScreen extends StatefulWidget {
 }
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
+  bool _isTheaterMode = false;
+  bool _isAutoplayEnabled = true;
   late YoutubePlayerController _controller;
-  bool _isPlayerReady = false;
+  final TextEditingController _commentController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    if (widget.video != null) {
-      _controller = YoutubePlayerController(
-        initialVideoId: widget.video!.videoId,
-        flags: const YoutubePlayerFlags(
-          autoPlay: true,
-          mute: false,
-        ),
-      )..addListener(_listener);
-    }
-  }
-
-  void _listener() {
-    if (_isPlayerReady && mounted && !_controller.value.isFullScreen) {
-      setState(() {});
-    }
-  }
-
-  @override
-  void deactivate() {
-    // Pauses video while navigating to next page.
-    _controller.pause();
-    super.deactivate();
+    _controller = YoutubePlayerController.fromVideoId(
+      videoId: widget.video!.videoId,
+      autoPlay: true,
+      params: const YoutubePlayerParams(
+        showControls: true,
+        showFullscreenButton: true,
+        origin: 'https://www.youtube-nocookie.com',
+      ),
+    );
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _commentController.dispose();
     super.dispose();
   }
 
@@ -60,203 +51,197 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       );
     }
 
-    return YoutubePlayerBuilder(
-      player: YoutubePlayer(
-        controller: _controller,
-        showVideoProgressIndicator: true,
-        progressIndicatorColor: Colors.red,
-        onReady: () {
-          _isPlayerReady = true;
-        },
-      ),
-      builder: (context, player) {
-        return Scaffold(
-          backgroundColor: Colors.black,
-          body: SafeArea(
-            child: Column(
-              children: [
-                // Video Player
-                player,
-
-                // Scrollable Content
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.all(16.0),
-                    children: [
-                      // Title and Metadata
-                      Text(
-                        widget.video!.title,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.white),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F0F0F),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final bool isWide = constraints.maxWidth > 900;
+            
+            if (isWide && !_isTheaterMode) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            '${widget.video!.views} views',
-                            style: const TextStyle(color: Colors.grey),
-                          ),
-                          const SizedBox(width: 16),
-                          Text(
-                            widget.video!.duration,
-                            style: const TextStyle(color: Colors.grey),
-                          ),
-                        ],
-                      ),
-                      
-                      const SizedBox(height: 24),
-
-                      // Action Buttons
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          _buildActionButton(context, Icons.thumb_up_outlined, 'Like'),
-                          _buildActionButton(context, Icons.thumb_down_outlined, 'Dislike'),
-                          _buildActionButton(context, Icons.share_outlined, 'Share'),
-                          _buildActionButton(context, Icons.download_outlined, 'Download'),
-                        ],
-                      ),
-
-                      const SizedBox(height: 24),
-                      const Divider(color: Colors.grey),
-                      const SizedBox(height: 16),
-
-                      // Channel Info
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            child: Text(widget.video!.channelName.isNotEmpty ? widget.video!.channelName[0] : '?'),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              widget.video!.channelName,
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white),
-                              overflow: TextOverflow.ellipsis,
+                          YoutubePlayer(controller: _controller),
+                          _buildMetadataArea(),
+                          Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: CommentsSection(
+                              videoId: widget.video!.videoId,
+                              commentController: _commentController,
+                              onSubmitComment: _submitComment,
                             ),
                           ),
-                          TextButton(
-                            onPressed: () {},
-                            child: const Text('SUBSCRIBE'),
-                          ),
                         ],
                       ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 1,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                          child: Text(
+                            'Up Next',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        Expanded(child: _buildSuggestionsGrid(isWide: true)),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
 
-                      const SizedBox(height: 24),
-                      const Divider(color: Colors.grey),
-                      const SizedBox(height: 16),
-
-                      // Suggested Videos Header
-                      const Text(
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  YoutubePlayer(controller: _controller),
+                  _buildMetadataArea(),
+                  if (_isTheaterMode && isWide)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 3, 
+                            child: CommentsSection(
+                              videoId: widget.video!.videoId,
+                              commentController: _commentController,
+                              onSubmitComment: _submitComment,
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          Expanded(flex: 1, child: _buildSuggestionsGrid(isWide: true)),
+                        ],
+                      ),
+                    )
+                  else ...[
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16.0),
+                      child: CommentsPlaceholder(),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+                      child: Text(
                         'Up Next',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                       ),
-                      const SizedBox(height: 16),
-
-                      // Suggested Videos List (Horizontal)
-                      _buildSuggestedVideos(),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSuggestedVideos() {
-    return FutureBuilder<List<Video>>(
-      future: Provider.of<YoutubeService>(context, listen: false).getPopularVideos(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError || !snapshot.hasData) {
-          return const Text('Could not load suggested videos', style: TextStyle(color: Colors.white));
-        }
-
-        final suggestedVideos = snapshot.data!.where((v) => v.videoId != widget.video!.videoId).toList();
-
-        return SizedBox(
-          height: 220,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: suggestedVideos.length,
-            itemBuilder: (context, index) {
-              final suggested = suggestedVideos[index];
-              return Container(
-                width: 160,
-                margin: const EdgeInsets.only(right: 12),
-                child: InkWell(
-                  onTap: () {
-                    // Push new player screen
-                    context.push('/player', extra: suggested);
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Thumbnail
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: FadeInImage.memoryNetwork(
-                          placeholder: kTransparentImage,
-                          image: suggested.thumbnailUrl,
-                          height: 90,
-                          width: 160,
-                          fit: BoxFit.cover,
-                          imageErrorBuilder: (context, error, stackTrace) {
-                            return Container(
-                              height: 90,
-                              color: Colors.grey[800],
-                              child: const Center(child: Icon(Icons.error)),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Title
-                      Text(
-                        suggested.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 14),
-                      ),
-                      const SizedBox(height: 4),
-                      // Channel
-                      Text(
-                        suggested.channelName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildActionButton(BuildContext context, IconData icon, String label) {
-    return Column(
-      children: [
-        IconButton(
-          icon: Icon(icon, color: Colors.white),
-          onPressed: () {
-             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('$label action clicked')),
+                    ),
+                    _buildSuggestionsGrid(isWide: false),
+                  ],
+                ],
+              ),
             );
           },
         ),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white, fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _buildMetadataArea() {
+    return Column(
+      children: [
+        VideoMetadataWidget(
+          video: widget.video!,
+          isTheaterMode: _isTheaterMode,
+          isAutoplayEnabled: _isAutoplayEnabled,
+          onToggleTheater: () => setState(() => _isTheaterMode = !_isTheaterMode),
+          onToggleAutoplay: () => setState(() => _isAutoplayEnabled = !_isAutoplayEnabled),
+          onShowSpeedMenu: () => _showSpeedMenu(context),
         ),
+        ChannelInfoWidget(video: widget.video!),
+        VideoDescriptionWidget(description: widget.video!.description),
       ],
+    );
+  }
+
+  void _submitComment() async {
+    if (_commentController.text.trim().isEmpty) return;
+    final text = _commentController.text.trim();
+    _commentController.clear();
+    
+    await Provider.of<FirestoreService>(context, listen: false).addComment(widget.video!.videoId, text);
+    if (!mounted) return;
+    FocusScope.of(context).unfocus();
+  }
+
+  Widget _buildSuggestionsGrid({required bool isWide}) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: Provider.of<YoutubeService>(context, listen: false).getPopularVideos(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: Padding(
+            padding: EdgeInsets.all(20.0),
+            child: CircularProgressIndicator(),
+          ));
+        }
+        if (snapshot.hasError || !snapshot.hasData) {
+          return const Center(child: Text('Could not load suggestions', style: TextStyle(color: Colors.grey)));
+        }
+        
+        final videos = snapshot.data!['videos'] as List<Video>;
+        final list = videos
+            .where((v) => v.videoId != widget.video!.videoId)
+            .toList();
+
+        return ListView.builder(
+          shrinkWrap: true,
+          physics: isWide ? const AlwaysScrollableScrollPhysics() : const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: list.length,
+          itemBuilder: (context, i) {
+            final v = list[i];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16.0),
+              child: VideoCard(
+                video: v,
+                onTap: () => context.push('/player', extra: v),
+                onWatchLater: () {},
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showSpeedMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text('Playback Speed', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
+            ),
+            ...[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((speed) => ListTile(
+              title: Text('${speed}x', style: const TextStyle(color: Colors.white)),
+              onTap: () {
+                _controller.setPlaybackRate(speed);
+                Navigator.pop(context);
+              },
+              trailing: speed == 1.0 ? const Icon(Icons.check, color: Colors.blue) : null,
+            )),
+            const SizedBox(height: 20),
+          ],
+        );
+      },
     );
   }
 }

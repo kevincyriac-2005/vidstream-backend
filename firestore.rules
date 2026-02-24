@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // User-specific data (Watch Later, Likes, Subscriptions)
+    match /users/{userId}/{allSubcollections=**} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Video comments
+    match /videos/{videoId}/comments/{commentId} {
+      allow read: if true; // Publicly readable
+      allow create: if isSignedIn(); // Any authenticated user can comment
+      allow update, delete: if isOwner(request.resource.data.authorId) || isOwner(resource.data.authorId);
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
