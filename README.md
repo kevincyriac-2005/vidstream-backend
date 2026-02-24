@@ -66,7 +66,7 @@ Run it on Android, iOS, Web, or Desktop with a single codebase.
 
 ### 1. Clone the project
 ```bash
-git clone https://github.com/kevin-cyriac2005/vidstream-backend.git
+git clone https://github.com/kevin-cyriac2005/vidstream-app.git
 cd vidstream_app
 ```
 
